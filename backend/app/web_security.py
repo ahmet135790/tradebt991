@@ -20,7 +20,7 @@ PUBLIC_PATHS = frozenset({"/healthz", "/api/health"})
 OWNER_REQUIRED_PATHS = frozenset({"/api/web/access/check"})
 CUSTOMER_SESSION_PATH_PREFIXES = ("/api/v22", "/api/v24", "/api/v25")
 LOCAL_BOOTSTRAP_HOSTS = frozenset({"127.0.0.1", "::1", "localhost", "testclient"})
-VERCEL_PREVIEW_ORIGIN_RE = re.compile(r"^https://frontend-nu-two-18(?:-[a-z0-9]+)*\.vercel\.app$")
+VERCEL_PREVIEW_ORIGIN_RE = re.compile(r"^https://(?:frontend-nu-two-18|frontend-gh7asjvqj-ahmet-f11)(?:-[a-z0-9-]+)*\.vercel\.app$")
 
 
 def env_flag(name: str, *, default: bool = False) -> bool:

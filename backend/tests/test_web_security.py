@@ -103,6 +103,7 @@ class WebSecurityTests(unittest.TestCase):
         self.assertEqual(cors_origins("", fallback=[]), [])
         self.assertTrue(is_allowed_cors_origin("https://frontend-nu-two-18.vercel.app", {"https://frontend-nu-two-18.vercel.app"}))
         self.assertTrue(is_allowed_cors_origin("https://frontend-nu-two-18-git-main-ahmtt9871-dot.vercel.app", {"https://frontend-nu-two-18.vercel.app"}))
+        self.assertTrue(is_allowed_cors_origin("https://frontend-gh7asjvqj-ahmet-f11.vercel.app", {"https://frontend-nu-two-18.vercel.app"}))
         self.assertFalse(is_allowed_cors_origin("https://other-project.vercel.app", {"https://frontend-nu-two-18.vercel.app"}))
         self.assertFalse(is_allowed_cors_origin("http://frontend-nu-two-18.vercel.app", {"https://frontend-nu-two-18.vercel.app"}))
         old = os.environ.get("PROTREBOT_TEST_FLAG")
