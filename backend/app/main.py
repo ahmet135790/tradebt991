@@ -14,6 +14,8 @@ from redis import asyncio as redis_async
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from google.auth.transport.requests import Request as GoogleAuthRequest
+from google.oauth2.credentials import Credentials
 from pydantic import BaseModel, Field
 from .analysis import analyze
 from .exchange_connections import (
@@ -33,6 +35,7 @@ from .binance_demo import (
 from .v21_demo import init_v21_demo, router as v21_demo_router, shutdown_v21_demo
 from .v22_commercial import (
     authenticated_user,
+    gmail_configured,
     init_v22_commercial,
     router as v22_commercial_router,
     shutdown_v22_commercial,
@@ -270,6 +273,8 @@ def json_safe_payload(value):
     return value
 V11_RISK_TICK_SECONDS = 60
 V11_EVENT_LIMIT = 100
+HEALTH_CHECK_INTERVAL_SECONDS = 15 * 60
+HEALTH_STATE_KEY = "system-health"
 
 
 def safe_json_object(value: object) -> dict:
@@ -571,6 +576,157 @@ async def infrastructure_loop(application: FastAPI) -> None:
         await asyncio.sleep(15)
 
 
+def health_item(name: str, status: str, message: str, started: float) -> dict:
+    return {
+        "name": name,
+        "status": status,
+        "message": message,
+        "checked_at": datetime.now(timezone.utc).isoformat(),
+        "latency_ms": round((time.perf_counter() - started) * 1000, 2),
+    }
+
+
+async def health_check_database(application: FastAPI) -> dict:
+    started = time.perf_counter()
+    pool = getattr(application.state, "db_pool", None)
+    if pool is None:
+        return health_item("Database", "ERROR", "PostgreSQL connection unavailable.", started)
+    try:
+        await asyncio.wait_for(pool.fetchval("SELECT 1"), timeout=3)
+        return health_item("Database", "ACTIVE", "PostgreSQL connection healthy.", started)
+    except Exception:
+        return health_item("Database", "ERROR", "Database connection failed.", started)
+
+
+async def health_check_redis(application: FastAPI) -> dict:
+    started = time.perf_counter()
+    if not REDIS_URL:
+        return health_item("Redis", "DISABLED", "Redis is not configured.", started)
+    client = getattr(application.state, "redis_client", None)
+    if client is None:
+        return health_item("Redis", "ERROR", "Redis connection unavailable.", started)
+    try:
+        await asyncio.wait_for(client.ping(), timeout=3)
+        return health_item("Redis", "ACTIVE", "Redis connection healthy.", started)
+    except Exception:
+        return health_item("Redis", "ERROR", "Redis connection failed.", started)
+
+
+async def health_check_gmail() -> dict:
+    started = time.perf_counter()
+    if not gmail_configured():
+        return health_item("Email / Gmail API", "NOT CONFIGURED", "Gmail OAuth configuration is incomplete.", started)
+    try:
+        credentials = Credentials(
+            token=None,
+            refresh_token=os.environ["GMAIL_REFRESH_TOKEN"].strip(),
+            token_uri="https://oauth2.googleapis.com/token",
+            client_id=os.environ["GMAIL_CLIENT_ID"].strip(),
+            client_secret=os.environ["GMAIL_CLIENT_SECRET"].strip(),
+            scopes=["https://www.googleapis.com/auth/gmail.send"],
+        )
+        await asyncio.wait_for(asyncio.to_thread(credentials.refresh, GoogleAuthRequest()), timeout=10)
+        return health_item("Email / Gmail API", "ACTIVE", "OAuth connection healthy.", started)
+    except asyncio.TimeoutError:
+        return health_item("Email / Gmail API", "WARNING", "OAuth refresh timed out.", started)
+    except Exception:
+        return health_item("Email / Gmail API", "ERROR", "OAuth connection unavailable.", started)
+
+
+async def health_check_frontend(application: FastAPI) -> dict:
+    started = time.perf_counter()
+    try:
+        response = await asyncio.wait_for(application.state.http.get(PRODUCTION_WEB_ORIGIN), timeout=10)
+        if response.status_code < 400:
+            return health_item("Frontend / Vercel", "ACTIVE", "Vercel deployment reachable.", started)
+        return health_item("Frontend / Vercel", "WARNING", f"Frontend responded with HTTP {response.status_code}.", started)
+    except asyncio.TimeoutError:
+        return health_item("Frontend / Vercel", "WARNING", "Frontend request timed out.", started)
+    except Exception:
+        return health_item("Frontend / Vercel", "ERROR", "Frontend deployment unreachable.", started)
+
+
+async def health_check_market_data(application: FastAPI) -> dict:
+    started = time.perf_counter()
+    try:
+        response = await asyncio.wait_for(application.state.http.get(f"{FUTURES_MARKET_DATA_API}/fapi/v1/ping"), timeout=10)
+        if response.status_code == 200:
+            return health_item("Market data", "ACTIVE", "Read-only market data endpoint reachable.", started)
+        return health_item("Market data", "ERROR", f"Market data responded with HTTP {response.status_code}.", started)
+    except asyncio.TimeoutError:
+        return health_item("Market data", "WARNING", "Market data request timed out.", started)
+    except Exception:
+        return health_item("Market data", "ERROR", "Market data endpoint unreachable.", started)
+
+
+async def run_health_checks(application: FastAPI) -> dict:
+    started = time.perf_counter()
+    async with application.state.health_lock:
+        checks = await asyncio.gather(
+            health_check_database(application),
+            health_check_redis(application),
+            health_check_gmail(),
+            health_check_frontend(application),
+            health_check_market_data(application),
+            return_exceptions=True,
+        )
+        normalized = []
+        for check in checks:
+            if isinstance(check, dict):
+                normalized.append(check)
+            else:
+                normalized.append(health_item("Health check", "ERROR", "Health check failed.", started))
+        state = getattr(application.state, "v22_commercial", {}).get("state", {})
+        normalized.extend([
+            health_item("Backend API", "ACTIVE", "Backend process is serving requests.", started),
+            health_item("Authentication", "ACTIVE" if getattr(application.state, "v22_commercial", {}).get("secret") else "ERROR", "Authentication state is loaded." if getattr(application.state, "v22_commercial", {}).get("secret") else "Authentication state unavailable.", started),
+            health_item("Subscriptions", "ACTIVE" if state.get("subscriptions") is not None else "ERROR", "Subscription state is loaded." if state.get("subscriptions") is not None else "Subscription state unavailable.", started),
+            health_item("Admin API", "ACTIVE", "OWNER-protected admin API is available.", started),
+            health_item("Trading engine", "NOT CONFIGURED", "No independent trading-engine heartbeat is exposed.", started),
+            health_item("Live trading", "DISABLED" if not LIVE_CHANNEL_ENABLED else "NOT CONFIGURED", "Live order channel is disabled." if not LIVE_CHANNEL_ENABLED else "Live readiness is not established.", started),
+        ])
+        counts = {status: sum(1 for item in normalized if item["status"] == status) for status in ("ACTIVE", "WARNING", "ERROR", "DISABLED", "NOT CONFIGURED")}
+        snapshot = {"checks": normalized, "checked_at": datetime.now(timezone.utc).isoformat(), "next_check_at": (datetime.now(timezone.utc) + timedelta(seconds=HEALTH_CHECK_INTERVAL_SECONDS)).isoformat(), "counts": counts}
+        application.state.health_snapshot = snapshot
+        await persist_health_snapshot(application, snapshot)
+        return snapshot
+
+
+async def persist_health_snapshot(application: FastAPI, snapshot: dict) -> bool:
+    pool = getattr(application.state, "db_pool", None)
+    if pool is None:
+        snapshot["persistence"] = "UNAVAILABLE"
+        return False
+    try:
+        await pool.execute(
+            """
+            INSERT INTO application_state_snapshots (state_key, updated_at, payload)
+            VALUES ($1, NOW(), $2::jsonb)
+            ON CONFLICT (state_key) DO UPDATE
+            SET updated_at = NOW(), payload = EXCLUDED.payload
+            """,
+            HEALTH_STATE_KEY,
+            json.dumps(snapshot, ensure_ascii=True),
+        )
+        snapshot["persistence"] = "PERSISTED"
+        return True
+    except Exception:
+        snapshot["persistence"] = "ERROR"
+        return False
+
+
+async def restore_health_snapshot(application: FastAPI) -> None:
+    pool = getattr(application.state, "db_pool", None)
+    if pool is None:
+        return
+    try:
+        row = await pool.fetchrow("SELECT payload FROM application_state_snapshots WHERE state_key = $1", HEALTH_STATE_KEY)
+        if row and isinstance(row["payload"], dict):
+            application.state.health_snapshot = row["payload"]
+    except Exception:
+        return
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Exchange signatures and API-key traffic must not silently inherit an
@@ -589,6 +745,8 @@ async def lifespan(app: FastAPI):
     app.state.market_twin_restore_attempted = False
     app.state.paper_dirty = False
     app.state.snapshot_lock = asyncio.Lock()
+    app.state.health_lock = asyncio.Lock()
+    app.state.health_snapshot = None
     app.state.infrastructure = {"api": "BAĞLI", "database": "BAĞLANIYOR", "redis": "BAĞLANIYOR", "paper_storage": "BEKLENİYOR" if PAPER_ENABLED else "DEVRE DIŞI", "self_healing": "AKTİF", "last_checked": None, "message": "Testnet-First altyapısı kontrol ediliyor."}
     app.state.paper = {
         "balance": 10_000.0,
@@ -654,6 +812,7 @@ async def lifespan(app: FastAPI):
     await ensure_infrastructure(app)
     await init_exchange_connections(app)
     await init_v27_cloud(app)
+    await restore_health_snapshot(app)
     app.state.infrastructure_task = asyncio.create_task(infrastructure_loop(app))
     app.state.runtime_tasks = [app.state.infrastructure_task]
     if PAPER_ENABLED:
@@ -786,6 +945,20 @@ app.include_router(v24_commerce_router)
 app.include_router(v25_execution_router)
 app.include_router(v27_cloud_router)
 app.include_router(exchange_connections_router)
+
+
+@app.get("/api/v22/admin/system-health")
+async def admin_health(request):
+    authenticated_user(request, owner=True)
+    if request.app.state.health_snapshot is None:
+        raise HTTPException(503, "Health snapshot unavailable")
+    return request.app.state.health_snapshot
+
+
+@app.post("/api/v22/admin/system-health/check")
+async def admin_health_check(request):
+    authenticated_user(request, owner=True)
+    return await run_health_checks(request.app)
 
 
 @app.get("/api/health")

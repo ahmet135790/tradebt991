@@ -26,6 +26,7 @@ from app.commercial_core import (  # noqa: E402
     verify_token,
 )
 from app.v22_commercial import gmail_failure_log, send_auth_email, sync_v22_storage, v22_verification_status  # noqa: E402
+from app.main import health_item  # noqa: E402
 
 
 MAIN_SOURCE = (BACKEND / "app" / "main.py").read_text(encoding="utf-8")
@@ -38,6 +39,25 @@ GITIGNORE_SOURCE = (ROOT / ".gitignore").read_text(encoding="utf-8")
 
 
 class V22CommercialTests(unittest.TestCase):
+    def test_health_result_is_safe_and_standardized(self):
+        result = health_item("Database", "ERROR", "Database connection failed.", 0.0)
+        self.assertEqual(set(result), {"name", "status", "message", "checked_at", "latency_ms"})
+        self.assertEqual(result["status"], "ERROR")
+        self.assertNotIn("password", str(result).lower())
+
+    def test_health_endpoints_are_owner_protected_and_scheduler_is_fifteen_minutes(self):
+        source = (BACKEND / "app" / "main.py").read_text(encoding="utf-8")
+        cron_source = (BACKEND / "run_health_check.py").read_text(encoding="utf-8")
+        render_source = (ROOT / "render.yaml").read_text(encoding="utf-8")
+        self.assertIn('"/api/v22/admin/system-health"', source)
+        self.assertIn('"/api/v22/admin/system-health/check"', source)
+        self.assertIn("authenticated_user(request, owner=True)", source)
+        self.assertIn("HEALTH_CHECK_INTERVAL_SECONDS = 15 * 60", source)
+        self.assertNotIn("health_monitor_loop", source)
+        self.assertIn("asyncio.run(main())", cron_source)
+        self.assertIn('type: cron', render_source)
+        self.assertIn('schedule: "*/15 * * * *"', render_source)
+        self.assertIn("startCommand: python run_health_check.py", render_source)
     def test_verification_status_reads_without_consuming_token(self):
         secret = b"verification-status-test-secret-long-enough"
         user = {"id": "user-1", "role": "CUSTOMER", "email_verified": False}
