@@ -25,7 +25,7 @@ from app.commercial_core import (  # noqa: E402
     verify_password,
     verify_token,
 )
-from app.v22_commercial import gmail_failure_log, send_auth_email, sync_v22_storage, v22_verification_status  # noqa: E402
+from app.v22_commercial import gmail_failure_log, send_auth_email, sync_v22_storage, v22_admin_link_trading_account, v22_admin_trading_accounts, v22_admin_unlink_trading_account, v22_verification_status  # noqa: E402
 from app.main import health_item, healthz, run_health_checks  # noqa: E402
 
 
@@ -79,6 +79,151 @@ class V22CommercialTests(unittest.TestCase):
         source = (BACKEND / "app" / "main.py").read_text(encoding="utf-8")
         self.assertIn("async def admin_health(request: Request)", source)
         self.assertIn("async def admin_health_check(request: Request)", source)
+
+    def test_trading_account_ownership_schema_is_credential_free_and_idempotent(self):
+        source = V22_SOURCE
+        self.assertIn("CREATE TABLE IF NOT EXISTS trading_accounts", source)
+        self.assertIn("UNIQUE (user_id, provider, environment, account_reference)", source)
+        self.assertIn("CHECK (environment IN ('DEMO', 'TESTNET', 'PAPER', 'LIVE'))", source)
+        self.assertIn("account_reference TEXT NOT NULL DEFAULT ''", source)
+        self.assertIn("CREATE INDEX IF NOT EXISTS trading_accounts_user_id_idx", source)
+        for forbidden in ("api_key", "secret", "password", "refresh_token"):
+            self.assertNotIn(f"{forbidden} TEXT", source)
+
+    def test_owner_trading_account_endpoint_contract_is_safe(self):
+        source = V22_SOURCE
+        self.assertIn('@router.get("/admin/users/{user_id}/trading-accounts")', source)
+        self.assertIn("authenticated_user(request, owner=True)", source)
+        self.assertIn('SELECT id, provider, environment, status, created_at, updated_at', source)
+        self.assertNotIn('SELECT * FROM trading_accounts', source)
+        self.assertIn('raise HTTPException(404, "Kullanıcı bulunamadı")', source)
+
+    def test_trading_account_endpoint_enforces_owner_and_returns_empty_without_accounts(self):
+        from fastapi import HTTPException
+
+        secret = b"trading-account-owner-secret-long-enough"
+        owner = {"id": "owner-account-test", "role": "OWNER", "active": True, "email_verified": True, "auth_version": 1}
+        customer = {"id": "customer-account-test", "role": "CUSTOMER", "active": True, "email_verified": True, "auth_version": 1}
+
+        class Pool:
+            def __init__(self, rows=None):
+                self.rows = rows or []
+                self.executed = []
+
+            async def execute(self, query, *args):
+                self.executed.append(query)
+
+            async def fetch(self, query, *args):
+                return self.rows
+
+        pool = Pool()
+        application = SimpleNamespace(state=SimpleNamespace(
+            db_pool=pool,
+            v22_commercial={"secret": secret, "state": {"users": [owner, customer]}},
+        ))
+        owner_token = issue_token(owner["id"], owner["role"], secret, now=int(time.time()), ttl_seconds=3_600)
+        customer_token = issue_token(customer["id"], customer["role"], secret, now=int(time.time()), ttl_seconds=3_600)
+        owner_request = SimpleNamespace(app=application, headers={"authorization": f"Bearer {owner_token}"})
+        customer_request = SimpleNamespace(app=application, headers={"authorization": f"Bearer {customer_token}"})
+        missing_request = SimpleNamespace(app=application, headers={"authorization": f"Bearer {owner_token}"})
+
+        empty = asyncio.run(v22_admin_trading_accounts(customer["id"], owner_request))
+        self.assertEqual(empty, {"user_id": customer["id"], "accounts": []})
+        with self.assertRaisesRegex(HTTPException, "Yönetici yetkisi gerekli"):
+            asyncio.run(v22_admin_trading_accounts(customer["id"], customer_request))
+        unauthenticated = SimpleNamespace(app=application, headers={})
+        with self.assertRaisesRegex(HTTPException, "Oturum gerekli"):
+            asyncio.run(v22_admin_trading_accounts(customer["id"], unauthenticated))
+        with self.assertRaisesRegex(HTTPException, "Kullanıcı bulunamadı"):
+            asyncio.run(v22_admin_trading_accounts("missing-user", missing_request))
+
+        self.assertEqual(len(pool.executed), 3)
+
+    def test_trading_account_endpoint_returns_only_safe_account_fields(self):
+        secret = b"trading-account-response-secret-long-enough"
+        owner = {"id": "owner-account-response", "role": "OWNER", "active": True, "email_verified": True, "auth_version": 1}
+        created = SimpleNamespace(isoformat=lambda: "2026-09-05T00:00:00+00:00")
+        row = {"id": "account-1", "provider": "BINANCE", "environment": "TESTNET", "account_reference": "ahmet-testnet", "status": "ACTIVE", "created_at": created, "updated_at": created}
+
+        class Pool:
+            async def execute(self, query, *args):
+                return None
+
+            async def fetch(self, query, *args):
+                return [row]
+
+        application = SimpleNamespace(state=SimpleNamespace(
+            db_pool=Pool(),
+            v22_commercial={"secret": secret, "state": {"users": [owner]}},
+        ))
+        token = issue_token(owner["id"], owner["role"], secret, now=int(time.time()), ttl_seconds=3_600)
+        request = SimpleNamespace(app=application, headers={"authorization": f"Bearer {token}"})
+        response = asyncio.run(v22_admin_trading_accounts(owner["id"], request))
+        account = response["accounts"][0]
+        self.assertEqual(account["provider"], "BINANCE")
+        self.assertEqual(account["environment"], "TESTNET")
+        self.assertNotIn("api_key", str(response).lower())
+        self.assertNotIn("secret", str(response).lower())
+        self.assertNotIn("password", str(response).lower())
+
+    def test_owner_can_link_and_unlink_mapping_without_provider_calls(self):
+        from fastapi import HTTPException
+        secret = b"trading-account-link-secret-long-enough"
+        owner = {"id": "owner-link-test", "role": "OWNER", "active": True, "email_verified": True, "auth_version": 1}
+
+        class Pool:
+            def __init__(self):
+                self.rows = [{"id": "account-1", "provider": "BINANCE", "environment": "TESTNET", "account_reference": "safe ref", "status": "UNASSIGNED", "created_at": "2026-09-05T00:00:00+00:00", "updated_at": "2026-09-05T00:00:00+00:00"}]
+                self.deleted = False
+
+            async def execute(self, query, *args):
+                return None
+
+            async def fetchrow(self, query, *args):
+                if query.lstrip().upper().startswith("INSERT"):
+                    return self.rows[0]
+                if query.lstrip().upper().startswith("DELETE"):
+                    if self.deleted:
+                        return None
+                    self.deleted = True
+                    return {"id": "account-1"}
+                return None
+
+        pool = Pool()
+        application = SimpleNamespace(state=SimpleNamespace(db_pool=pool, v22_commercial={"secret": secret, "state": {"users": [owner]}}))
+        token = issue_token(owner["id"], owner["role"], secret, now=int(time.time()), ttl_seconds=3_600)
+        request = SimpleNamespace(app=application, headers={"authorization": f"Bearer {token}"})
+        linked = asyncio.run(v22_admin_link_trading_account("owner-link-test", SimpleNamespace(provider="BINANCE", environment="TESTNET", account_reference="  safe   ref  "), request))
+        self.assertEqual(linked["account"]["status"], "UNASSIGNED")
+        self.assertEqual(linked["account"]["account_reference"], "safe ref")
+        removed = asyncio.run(v22_admin_unlink_trading_account("owner-link-test", "account-1", request))
+        self.assertTrue(removed["ok"])
+
+    def test_link_rejects_invalid_or_duplicate_mapping_without_provider_access(self):
+        from fastapi import HTTPException
+        from pydantic import ValidationError
+        secret = b"trading-account-validation-secret-long-enough"
+        owner = {"id": "owner-validation-test", "role": "OWNER", "active": True, "email_verified": True, "auth_version": 1}
+
+        class Pool:
+            async def execute(self, query, *args):
+                return None
+
+            async def fetchrow(self, query, *args):
+                raise Exception("duplicate key value violates unique constraint")
+
+        application = SimpleNamespace(state=SimpleNamespace(db_pool=Pool(), v22_commercial={"secret": secret, "state": {"users": [owner]}}))
+        token = issue_token(owner["id"], owner["role"], secret, now=int(time.time()), ttl_seconds=3_600)
+        request = SimpleNamespace(app=application, headers={"authorization": f"Bearer {token}"})
+        with self.assertRaisesRegex(HTTPException, "mapping zaten mevcut"):
+            asyncio.run(v22_admin_link_trading_account("owner-validation-test", SimpleNamespace(provider="BINANCE", environment="TESTNET", account_reference="safe-ref"), request))
+        from app.v22_commercial import TradingAccountLinkRequest
+        with self.assertRaises(ValidationError):
+            TradingAccountLinkRequest(provider="BINANCE", environment="INVALID", account_reference="safe-ref")
+        with self.assertRaises(ValidationError):
+            TradingAccountLinkRequest(provider="BINANCE", environment="TESTNET", account_reference="")
+        with self.assertRaises(ValidationError):
+            TradingAccountLinkRequest(provider="BINANCE", environment="TESTNET", account_reference="safe-ref", api_key="forbidden")
 
     def test_health_endpoints_are_owner_protected_and_render_cron_is_absent(self):
         source = (BACKEND / "app" / "main.py").read_text(encoding="utf-8")

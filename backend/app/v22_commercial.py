@@ -27,7 +27,7 @@ from urllib.parse import urlparse
 from fastapi import APIRouter, HTTPException, Query, Request
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from .binance_demo import credentials_configured, public_status as demo_public_status
 from .commercial_core import (
@@ -240,6 +240,27 @@ async def ensure_commercial_schema(application: Any) -> None:
           updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
           payload JSONB NOT NULL
         )
+        """
+    )
+    await pool.execute(
+        """
+        CREATE TABLE IF NOT EXISTS trading_accounts (
+          id TEXT PRIMARY KEY,
+          user_id TEXT NOT NULL,
+          provider TEXT NOT NULL,
+          environment TEXT NOT NULL CHECK (environment IN ('DEMO', 'TESTNET', 'PAPER', 'LIVE')),
+          account_reference TEXT NOT NULL DEFAULT '',
+          status TEXT NOT NULL DEFAULT 'UNASSIGNED',
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          UNIQUE (user_id, provider, environment, account_reference)
+        )
+        """
+    )
+    await pool.execute(
+        """
+        CREATE INDEX IF NOT EXISTS trading_accounts_user_id_idx
+        ON trading_accounts (user_id)
         """
     )
 
@@ -517,6 +538,14 @@ class SubscriptionRequest(BaseModel):
 class CheckoutRequest(BaseModel):
     plan: Literal["STARTER", "PRO", "ELITE"]
     billing_interval: Literal["monthly", "annual"] = "monthly"
+
+
+class TradingAccountLinkRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    provider: Literal["BINANCE"]
+    environment: Literal["DEMO", "TESTNET", "PAPER", "LIVE"]
+    account_reference: str = Field(min_length=1, max_length=160)
 
 
 class PlanUpdateRequest(BaseModel):
@@ -1070,6 +1099,106 @@ async def v22_logout(request: Request):
 async def v22_admin_overview(request: Request):
     authenticated_user(request, owner=True)
     return admin_overview(runtime(request)["state"])
+
+
+@router.get("/admin/users/{user_id}/trading-accounts")
+async def v22_admin_trading_accounts(user_id: str, request: Request):
+    authenticated_user(request, owner=True)
+    rt = runtime(request)
+    if not any(str(item.get("id")) == user_id for item in rt["state"]["users"]):
+        raise HTTPException(404, "Kullanıcı bulunamadı")
+    pool = getattr(request.app.state, "db_pool", None)
+    if pool is None:
+        return {"user_id": user_id, "accounts": []}
+    await ensure_commercial_schema(request.app)
+    rows = await pool.fetch(
+        """
+        SELECT id, provider, environment, status, created_at, updated_at
+        FROM trading_accounts
+        WHERE user_id = $1
+        ORDER BY created_at ASC, id ASC
+        """,
+        user_id,
+    )
+    return {
+        "user_id": user_id,
+        "accounts": [
+            {
+                "id": str(row["id"]),
+                "provider": str(row["provider"]),
+                "environment": str(row["environment"]),
+                "account_reference": str(row["account_reference"]),
+                "status": str(row["status"]),
+                "created_at": row["created_at"].isoformat() if hasattr(row["created_at"], "isoformat") else str(row["created_at"]),
+                "updated_at": row["updated_at"].isoformat() if hasattr(row["updated_at"], "isoformat") else str(row["updated_at"]),
+            }
+            for row in rows
+        ],
+    }
+
+
+@router.post("/admin/users/{user_id}/trading-accounts")
+async def v22_admin_link_trading_account(user_id: str, payload: TradingAccountLinkRequest, request: Request):
+    authenticated_user(request, owner=True)
+    rt = runtime(request)
+    if not any(str(item.get("id")) == user_id for item in rt["state"]["users"]):
+        raise HTTPException(404, "Kullanıcı bulunamadı")
+    account_reference = " ".join(payload.account_reference.split())
+    if not account_reference:
+        raise HTTPException(422, "Account reference boş olamaz")
+    pool = getattr(request.app.state, "db_pool", None)
+    if pool is None:
+        raise HTTPException(503, "Trading account ownership storage unavailable")
+    await ensure_commercial_schema(request.app)
+    try:
+        row = await pool.fetchrow(
+            """
+            INSERT INTO trading_accounts (id, user_id, provider, environment, account_reference, status)
+            VALUES ($1, $2, $3, $4, $5, 'UNASSIGNED')
+            RETURNING id, provider, environment, account_reference, status, created_at, updated_at
+            """,
+            uuid.uuid4().hex,
+            user_id,
+            payload.provider,
+            payload.environment,
+            account_reference,
+        )
+    except Exception as exc:
+        if "unique" in str(exc).lower() or "duplicate" in str(exc).lower():
+            raise HTTPException(409, "Bu trading account mapping zaten mevcut") from exc
+        raise HTTPException(503, "Trading account ownership storage unavailable") from exc
+    return {
+        "user_id": user_id,
+        "account": {
+            "id": str(row["id"]),
+            "provider": str(row["provider"]),
+            "environment": str(row["environment"]),
+            "account_reference": str(row["account_reference"]),
+            "status": str(row["status"]),
+            "created_at": row["created_at"].isoformat() if hasattr(row["created_at"], "isoformat") else str(row["created_at"]),
+            "updated_at": row["updated_at"].isoformat() if hasattr(row["updated_at"], "isoformat") else str(row["updated_at"]),
+        },
+    }
+
+
+@router.delete("/admin/users/{user_id}/trading-accounts/{account_id}")
+async def v22_admin_unlink_trading_account(user_id: str, account_id: str, request: Request):
+    authenticated_user(request, owner=True)
+    rt = runtime(request)
+    if not any(str(item.get("id")) == user_id for item in rt["state"]["users"]):
+        raise HTTPException(404, "Kullanıcı bulunamadı")
+    pool = getattr(request.app.state, "db_pool", None)
+    if pool is None:
+        raise HTTPException(503, "Trading account ownership storage unavailable")
+    await ensure_commercial_schema(request.app)
+    deleted = await pool.fetchrow(
+        "DELETE FROM trading_accounts WHERE id = $1 AND user_id = $2 RETURNING id",
+        account_id,
+        user_id,
+    )
+    if not deleted:
+        raise HTTPException(404, "Trading account mapping bulunamadı")
+    return {"ok": True, "user_id": user_id, "account_id": account_id}
 
 
 @router.patch("/admin/users/{user_id}/role")
