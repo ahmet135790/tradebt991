@@ -55,7 +55,7 @@ from .paper_autonomy import (
     dynamic_paper_allocation,
     rank_paper_candidates,
 )
-from .web_security import PUBLIC_PATHS, bearer_token, cors_origins, env_flag, evaluate_access
+from .web_security import PUBLIC_PATHS, bearer_token, cors_origins, env_flag, evaluate_access, is_allowed_cors_origin
 
 BINANCE_API = "https://api.binance.com"
 FUTURES_MARKET_DATA_API = DEMO_REST_BASE
@@ -74,6 +74,7 @@ WEB_CORS_ORIGINS = list(dict.fromkeys([
     *cors_origins(os.getenv("PROTREBOT_CORS_ORIGINS"), fallback=[]),
     PRODUCTION_WEB_ORIGIN,
 ]))
+WEB_CORS_ORIGIN_REGEX = r"https://frontend-nu-two-18(?:-[a-z0-9]+)*\.vercel\.app"
 PAPER_ENABLED = env_flag("PROTREBOT_PAPER_ENABLED", default=True)
 RISK_PER_TRADE = 0.01
 SHORT_MTF_ALIGNMENT_MAX = 80.0
@@ -878,9 +879,10 @@ app = FastAPI(title="ProTreBot Elite X API", version="28.0.0", lifespan=lifespan
 app.add_middleware(
     CORSMiddleware,
     allow_origins=WEB_CORS_ORIGINS,
+    allow_origin_regex=WEB_CORS_ORIGIN_REGEX,
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allow_headers=["*"],
+    allow_headers=["Accept", "Authorization", "Content-Type", "Origin", "X-Requested-With", "X-Protrebot-Owner"],
 )
 
 MEMBER_PUBLIC_PATHS = frozenset({
@@ -892,7 +894,7 @@ MEMBER_PUBLIC_PATHS = frozenset({
 
 def apply_cors_headers(request, response):
     origin = request.headers.get("origin")
-    if origin in WEB_CORS_ORIGINS:
+    if is_allowed_cors_origin(origin, WEB_CORS_ORIGINS):
         response.headers["Access-Control-Allow-Origin"] = origin
         response.headers["Access-Control-Allow-Credentials"] = "true"
         response.headers["Vary"] = "Origin"

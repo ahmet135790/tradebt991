@@ -10,6 +10,7 @@ from __future__ import annotations
 import hmac
 import json
 import os
+import re
 from dataclasses import dataclass
 from urllib.parse import urlsplit
 
@@ -19,6 +20,7 @@ PUBLIC_PATHS = frozenset({"/healthz", "/api/health"})
 OWNER_REQUIRED_PATHS = frozenset({"/api/web/access/check"})
 CUSTOMER_SESSION_PATH_PREFIXES = ("/api/v22", "/api/v24", "/api/v25")
 LOCAL_BOOTSTRAP_HOSTS = frozenset({"127.0.0.1", "::1", "localhost", "testclient"})
+VERCEL_PREVIEW_ORIGIN_RE = re.compile(r"^https://frontend-nu-two-18(?:-[a-z0-9]+)*\.vercel\.app$")
 
 
 def env_flag(name: str, *, default: bool = False) -> bool:
@@ -61,6 +63,11 @@ def cors_origins(value: str | None, *, fallback: list[str] | None = None) -> lis
         configured.append(origin)
     configured = list(dict.fromkeys(configured))
     return configured or (fallback if fallback is not None else ["http://localhost:5173", "http://127.0.0.1:5173"])
+
+
+def is_allowed_cors_origin(origin: str | None, configured_origins: set[str] | list[str] | tuple[str, ...]) -> bool:
+    normalized = str(origin or "").strip().rstrip("/")
+    return normalized in configured_origins or bool(VERCEL_PREVIEW_ORIGIN_RE.fullmatch(normalized))
 
 
 def bearer_token(value: str | None) -> str:

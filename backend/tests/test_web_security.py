@@ -6,7 +6,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app.web_security import bootstrap_access_allowed, bearer_token, cors_origins, env_flag, evaluate_access
+from app.web_security import bootstrap_access_allowed, bearer_token, cors_origins, env_flag, evaluate_access, is_allowed_cors_origin
 
 
 class WebSecurityTests(unittest.TestCase):
@@ -101,6 +101,10 @@ class WebSecurityTests(unittest.TestCase):
             ["https://frontend-nu-two-18.vercel.app"],
         )
         self.assertEqual(cors_origins("", fallback=[]), [])
+        self.assertTrue(is_allowed_cors_origin("https://frontend-nu-two-18.vercel.app", {"https://frontend-nu-two-18.vercel.app"}))
+        self.assertTrue(is_allowed_cors_origin("https://frontend-nu-two-18-git-main-ahmtt9871-dot.vercel.app", {"https://frontend-nu-two-18.vercel.app"}))
+        self.assertFalse(is_allowed_cors_origin("https://other-project.vercel.app", {"https://frontend-nu-two-18.vercel.app"}))
+        self.assertFalse(is_allowed_cors_origin("http://frontend-nu-two-18.vercel.app", {"https://frontend-nu-two-18.vercel.app"}))
         old = os.environ.get("PROTREBOT_TEST_FLAG")
         try:
             os.environ["PROTREBOT_TEST_FLAG"] = "yes"
