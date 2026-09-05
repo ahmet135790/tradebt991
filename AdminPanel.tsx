@@ -1,3 +1,5 @@
+function EmptyState({icon:Icon,title,text}:{icon:typeof Activity;title:string;text:string}) { return <div className="adminEmpty"><Icon/><b>{title}</b><span>{text}</span></div> }
+
 import { useEffect, useMemo, useState } from 'react'
 import { Activity, AlertTriangle, ArrowLeft, Ban, Bell, CheckCircle2, ChevronRight, CircleDollarSign, Database, LayoutDashboard, LogOut, Menu, RefreshCw, Search, Settings, ShieldAlert, ShieldCheck, SlidersHorizontal, UserRound, Users, WalletCards, X } from 'lucide-react'
 import { API_BASE, userSessionToken } from './api'
