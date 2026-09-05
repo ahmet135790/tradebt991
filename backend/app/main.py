@@ -686,7 +686,9 @@ async def run_health_checks(application: FastAPI) -> dict:
             health_item("Live trading", "DISABLED" if not LIVE_CHANNEL_ENABLED else "NOT CONFIGURED", "Live order channel is disabled." if not LIVE_CHANNEL_ENABLED else "Live readiness is not established.", started),
         ])
         counts = {status: sum(1 for item in normalized if item["status"] == status) for status in ("ACTIVE", "WARNING", "ERROR", "DISABLED", "NOT CONFIGURED")}
-        snapshot = {"checks": normalized, "checked_at": datetime.now(timezone.utc).isoformat(), "next_check_at": (datetime.now(timezone.utc) + timedelta(seconds=HEALTH_CHECK_INTERVAL_SECONDS)).isoformat(), "counts": counts}
+        overall_status = "ERROR" if counts["ERROR"] else "WARNING" if counts["WARNING"] else "ACTIVE"
+        checked_at = datetime.now(timezone.utc).isoformat()
+        snapshot = {"overall_status": overall_status, "checks": normalized, "checked_at": checked_at, "last_checked_at": checked_at, "next_check_at": (datetime.now(timezone.utc) + timedelta(seconds=HEALTH_CHECK_INTERVAL_SECONDS)).isoformat(), "counts": counts, "incident_count": counts["ERROR"] + counts["WARNING"]}
         application.state.health_snapshot = snapshot
         await persist_health_snapshot(application, snapshot)
         return snapshot
@@ -982,6 +984,11 @@ async def health():
         "cloud_evidence": app.state.v27_cloud.get("status", "BAŞLIYOR"),
         "web_access": "YÖNETİCİ KİLİTLİ" if WEB_REQUIRE_AUTH else "YEREL MOD",
     }
+
+
+@app.get("/healthz")
+async def healthz():
+    return {"status": "ok"}
 
 
 @app.get("/api/web/access/check")

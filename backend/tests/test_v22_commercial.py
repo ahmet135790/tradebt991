@@ -8,7 +8,7 @@ import time
 import unittest
 from types import SimpleNamespace
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 
 ROOT = Path(__file__).parents[2]
@@ -26,7 +26,7 @@ from app.commercial_core import (  # noqa: E402
     verify_token,
 )
 from app.v22_commercial import gmail_failure_log, send_auth_email, sync_v22_storage, v22_verification_status  # noqa: E402
-from app.main import health_item  # noqa: E402
+from app.main import health_item, healthz, run_health_checks  # noqa: E402
 
 
 MAIN_SOURCE = (BACKEND / "app" / "main.py").read_text(encoding="utf-8")
@@ -45,19 +45,50 @@ class V22CommercialTests(unittest.TestCase):
         self.assertEqual(result["status"], "ERROR")
         self.assertNotIn("password", str(result).lower())
 
-    def test_health_endpoints_are_owner_protected_and_scheduler_is_fifteen_minutes(self):
+    def test_health_snapshot_has_real_aggregate_and_persists_without_side_effects(self):
+        application = SimpleNamespace(state=SimpleNamespace(
+            health_lock=asyncio.Lock(),
+            health_snapshot=None,
+            v22_commercial={"secret": b"owner-secret", "state": {"subscriptions": []}},
+        ))
+        checks = [
+            AsyncMock(return_value=health_item("Database", "ERROR", "Database connection failed.", 0.0)),
+            AsyncMock(return_value=health_item("Redis", "ACTIVE", "Redis connection healthy.", 0.0)),
+            AsyncMock(return_value=health_item("Gmail", "WARNING", "OAuth refresh timed out.", 0.0)),
+            AsyncMock(return_value=health_item("Frontend", "ACTIVE", "Frontend reachable.", 0.0)),
+            AsyncMock(return_value=health_item("Market data", "ACTIVE", "Read-only endpoint reachable.", 0.0)),
+        ]
+        with patch("app.main.health_check_database", checks[0]), patch("app.main.health_check_redis", checks[1]), patch("app.main.health_check_gmail", checks[2]), patch("app.main.health_check_frontend", checks[3]), patch("app.main.health_check_market_data", checks[4]), patch("app.main.persist_health_snapshot", new=AsyncMock(return_value=True)):
+            snapshot = asyncio.run(run_health_checks(application))
+        self.assertEqual(snapshot["overall_status"], "ERROR")
+        self.assertEqual(snapshot["last_checked_at"], snapshot["checked_at"])
+        self.assertEqual(snapshot["incident_count"], 2)
+        self.assertEqual(snapshot["counts"]["ERROR"], 1)
+        self.assertEqual(snapshot["counts"]["WARNING"], 1)
+        self.assertEqual((asyncio.run(healthz()))["status"], "ok")
+
+    def test_admin_panel_reads_snapshot_and_uses_post_then_get(self):
+        panel_source = (ROOT / "AdminPanel.tsx").read_text(encoding="utf-8")
+        self.assertIn("/admin/system-health", panel_source)
+        self.assertIn("/admin/system-health/check", panel_source)
+        self.assertIn("await refreshHealth()", panel_source)
+        self.assertIn("45000", panel_source)
+        self.assertIn("last_checked_at", panel_source)
+
+    def test_health_endpoints_are_owner_protected_and_render_cron_is_absent(self):
         source = (BACKEND / "app" / "main.py").read_text(encoding="utf-8")
-        cron_source = (BACKEND / "run_health_check.py").read_text(encoding="utf-8")
         render_source = (ROOT / "render.yaml").read_text(encoding="utf-8")
         self.assertIn('"/api/v22/admin/system-health"', source)
         self.assertIn('"/api/v22/admin/system-health/check"', source)
+        self.assertIn('"/healthz"', (BACKEND / "app" / "web_security.py").read_text(encoding="utf-8"))
         self.assertIn("authenticated_user(request, owner=True)", source)
         self.assertIn("HEALTH_CHECK_INTERVAL_SECONDS = 15 * 60", source)
+        self.assertIn('"overall_status": overall_status', source)
+        self.assertIn('"last_checked_at": checked_at', source)
+        self.assertIn('healthCheckPath: /healthz', render_source)
         self.assertNotIn("health_monitor_loop", source)
-        self.assertIn("asyncio.run(main())", cron_source)
-        self.assertIn('type: cron', render_source)
-        self.assertIn('schedule: "*/15 * * * *"', render_source)
-        self.assertIn("startCommand: python run_health_check.py", render_source)
+        self.assertNotIn("type: cron", render_source)
+        self.assertNotIn('schedule: "*/15 * * * *"', render_source)
     def test_verification_status_reads_without_consuming_token(self):
         secret = b"verification-status-test-secret-long-enough"
         user = {"id": "user-1", "role": "CUSTOMER", "email_verified": False}

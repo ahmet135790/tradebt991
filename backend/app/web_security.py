@@ -15,7 +15,7 @@ from urllib.parse import urlsplit
 
 
 MIN_ACCESS_TOKEN_LENGTH = 24
-PUBLIC_PATHS = frozenset({"/api/health"})
+PUBLIC_PATHS = frozenset({"/healthz", "/api/health"})
 OWNER_REQUIRED_PATHS = frozenset({"/api/web/access/check"})
 CUSTOMER_SESSION_PATH_PREFIXES = ("/api/v22", "/api/v24", "/api/v25")
 LOCAL_BOOTSTRAP_HOSTS = frozenset({"127.0.0.1", "::1", "localhost", "testclient"})
