@@ -11,7 +11,7 @@ import httpx
 import asyncpg
 import websockets
 from redis import asyncio as redis_async
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from google.auth.transport.requests import Request as GoogleAuthRequest
@@ -35,6 +35,7 @@ from .binance_demo import (
 from .v21_demo import init_v21_demo, router as v21_demo_router, shutdown_v21_demo
 from .v22_commercial import (
     authenticated_user,
+    ensure_commercial_schema,
     gmail_configured,
     init_v22_commercial,
     router as v22_commercial_router,
@@ -699,22 +700,32 @@ async def persist_health_snapshot(application: FastAPI, snapshot: dict) -> bool:
     pool = getattr(application.state, "db_pool", None)
     if pool is None:
         snapshot["persistence"] = "UNAVAILABLE"
+        snapshot["persistence_message"] = "PostgreSQL connection unavailable."
         return False
     try:
-        await pool.execute(
-            """
-            INSERT INTO application_state_snapshots (state_key, updated_at, payload)
-            VALUES ($1, NOW(), $2::jsonb)
-            ON CONFLICT (state_key) DO UPDATE
-            SET updated_at = NOW(), payload = EXCLUDED.payload
-            """,
-            HEALTH_STATE_KEY,
-            json.dumps(snapshot, ensure_ascii=True),
-        )
+        for attempt in range(2):
+            try:
+                await pool.execute(
+                    """
+                    INSERT INTO application_state_snapshots (state_key, updated_at, payload)
+                    VALUES ($1, NOW(), $2::jsonb)
+                    ON CONFLICT (state_key) DO UPDATE
+                    SET updated_at = NOW(), payload = EXCLUDED.payload
+                    """,
+                    HEALTH_STATE_KEY,
+                    json.dumps(snapshot, ensure_ascii=True),
+                )
+                break
+            except Exception:
+                if attempt == 1:
+                    raise
+                await ensure_commercial_schema(application)
         snapshot["persistence"] = "PERSISTED"
+        snapshot.pop("persistence_message", None)
         return True
     except Exception:
         snapshot["persistence"] = "ERROR"
+        snapshot["persistence_message"] = "Health snapshot persistence failed."
         return False
 
 
@@ -952,15 +963,25 @@ app.include_router(exchange_connections_router)
 
 
 @app.get("/api/v22/admin/system-health")
-async def admin_health(request):
+async def admin_health(request: Request):
     authenticated_user(request, owner=True)
     if request.app.state.health_snapshot is None:
-        raise HTTPException(503, "Health snapshot unavailable")
+        return {
+            "overall_status": "UNAVAILABLE",
+            "checks": [],
+            "checked_at": None,
+            "last_checked_at": None,
+            "next_check_at": None,
+            "counts": {"ACTIVE": 0, "WARNING": 0, "ERROR": 0, "DISABLED": 0, "NOT CONFIGURED": 0},
+            "incident_count": 0,
+            "persistence": "UNAVAILABLE",
+            "persistence_message": "No persisted health snapshot is available.",
+        }
     return request.app.state.health_snapshot
 
 
 @app.post("/api/v22/admin/system-health/check")
-async def admin_health_check(request):
+async def admin_health_check(request: Request):
     authenticated_user(request, owner=True)
     return await run_health_checks(request.app)
 

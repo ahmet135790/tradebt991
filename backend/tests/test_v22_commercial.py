@@ -75,6 +75,11 @@ class V22CommercialTests(unittest.TestCase):
         self.assertIn("45000", panel_source)
         self.assertIn("last_checked_at", panel_source)
 
+    def test_health_routes_treat_request_as_request_context(self):
+        source = (BACKEND / "app" / "main.py").read_text(encoding="utf-8")
+        self.assertIn("async def admin_health(request: Request)", source)
+        self.assertIn("async def admin_health_check(request: Request)", source)
+
     def test_health_endpoints_are_owner_protected_and_render_cron_is_absent(self):
         source = (BACKEND / "app" / "main.py").read_text(encoding="utf-8")
         render_source = (ROOT / "render.yaml").read_text(encoding="utf-8")
