@@ -67,7 +67,7 @@ DATABASE_URL = os.getenv(
     "DATABASE_URL",
     "postgresql://protrebot:protrebot_local_change_me@127.0.0.1:5432/protrebot",
 ).strip()
-REDIS_URL = os.getenv("REDIS_URL", "redis://127.0.0.1:6379/0").strip()
+REDIS_URL = os.getenv("REDIS_URL", "").strip()
 WEB_REQUIRE_AUTH = env_flag("PROTREBOT_WEB_REQUIRE_AUTH", default=False)
 WEB_ACCESS_TOKEN = os.getenv("PROTREBOT_WEB_ACCESS_TOKEN", "").strip()
 PRODUCTION_WEB_ORIGIN = "https://frontend-nu-two-18.vercel.app"

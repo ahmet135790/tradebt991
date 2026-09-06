@@ -26,7 +26,7 @@ from app.commercial_core import (  # noqa: E402
     verify_token,
 )
 from app.v22_commercial import gmail_failure_log, send_auth_email, sync_v22_storage, v22_admin_link_trading_account, v22_admin_trading_accounts, v22_admin_unlink_trading_account, v22_verification_status  # noqa: E402
-from app.main import health_item, healthz, run_health_checks  # noqa: E402
+from app.main import health_check_redis, health_item, healthz, run_health_checks  # noqa: E402
 
 
 MAIN_SOURCE = (BACKEND / "app" / "main.py").read_text(encoding="utf-8")
@@ -44,6 +44,13 @@ class V22CommercialTests(unittest.TestCase):
         self.assertEqual(set(result), {"name", "status", "message", "checked_at", "latency_ms"})
         self.assertEqual(result["status"], "ERROR")
         self.assertNotIn("password", str(result).lower())
+
+    def test_redis_without_url_is_disabled_not_error(self):
+        application = SimpleNamespace(state=SimpleNamespace(redis_client=None))
+        with patch("app.main.REDIS_URL", ""):
+            result = asyncio.run(health_check_redis(application))
+        self.assertEqual(result["status"], "DISABLED")
+        self.assertEqual(result["message"], "Redis is not configured.")
 
     def test_health_snapshot_has_real_aggregate_and_persists_without_side_effects(self):
         application = SimpleNamespace(state=SimpleNamespace(
