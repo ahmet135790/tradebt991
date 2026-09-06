@@ -35,7 +35,7 @@ class WebSecurityTests(unittest.TestCase):
     def test_wrong_owner_token_is_rejected(self):
         decision = evaluate_access(
             required=True, configured_token="a" * 32, authorization=f"Bearer {'b' * 32}",
-            path="/api/exchange-connections/save", method="POST",
+            path="/api/web/access/check", method="GET",
         )
         self.assertFalse(decision.allowed)
         self.assertEqual(decision.status_code, 401)

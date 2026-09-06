@@ -410,6 +410,15 @@ async def _require_ready(application: Any) -> Any:
     return application.state.db_pool
 
 
+def _require_owner_member(request: Request) -> dict[str, Any]:
+    user = getattr(request.state, "member", None)
+    if not user:
+        raise HTTPException(401, "Oturum gerekli")
+    if user.get("role") != "OWNER":
+        raise HTTPException(403, "Yönetici yetkisi gerekli")
+    return user
+
+
 @router.get("/status")
 async def exchange_connection_status(request: Request) -> dict[str, Any]:
     await ensure_exchange_vault(request.app)
@@ -418,6 +427,7 @@ async def exchange_connection_status(request: Request) -> dict[str, Any]:
 
 @router.post("/test")
 async def exchange_connection_test(request: Request, body: TestCredentialsRequest) -> dict[str, Any]:
+    _require_owner_member(request)
     await _require_ready(request.app)
     mode = normalize_mode(body.mode)
     if body.api_key is not None and body.secret_key is not None:
@@ -436,6 +446,7 @@ async def exchange_connection_test(request: Request, body: TestCredentialsReques
 
 @router.post("/save")
 async def exchange_connection_save(request: Request, body: SaveCredentialsRequest) -> dict[str, Any]:
+    _require_owner_member(request)
     pool = await _require_ready(request.app)
     mode = normalize_mode(body.mode)
     if body.confirmation.strip().upper() != SAVE_CONFIRMATIONS[mode]:
@@ -486,6 +497,7 @@ async def exchange_connection_save(request: Request, body: SaveCredentialsReques
 
 @router.post("/activate")
 async def exchange_connection_activate(request: Request, body: ConnectionActionRequest) -> dict[str, Any]:
+    _require_owner_member(request)
     pool = await _require_ready(request.app)
     mode = normalize_mode(body.mode)
     if body.confirmation.strip().upper() != ACTIVATE_CONFIRMATIONS[mode]:
@@ -515,6 +527,7 @@ async def exchange_connection_activate(request: Request, body: ConnectionActionR
 
 @router.post("/deactivate")
 async def exchange_connection_deactivate(request: Request, body: ConnectionActionRequest) -> dict[str, Any]:
+    _require_owner_member(request)
     pool = await _require_ready(request.app)
     mode = normalize_mode(body.mode)
     if body.confirmation.strip().upper() != "BAĞLANTIYI KAPAT":
@@ -532,6 +545,7 @@ async def exchange_connection_deactivate(request: Request, body: ConnectionActio
 
 @router.delete("/credentials")
 async def exchange_connection_delete(request: Request, body: ConnectionActionRequest) -> dict[str, Any]:
+    _require_owner_member(request)
     pool = await _require_ready(request.app)
     mode = normalize_mode(body.mode)
     if body.confirmation.strip().upper() != DELETE_CONFIRMATION:

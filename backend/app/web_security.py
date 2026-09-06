@@ -21,11 +21,6 @@ OWNER_REQUIRED_PATHS = frozenset({"/api/web/access/check"})
 CUSTOMER_SESSION_PATH_PREFIXES = ("/api/v22", "/api/v24", "/api/v25")
 OWNER_GATE_PATH_PREFIXES = (
     "/api/web/access/check",
-    "/api/exchange-connections/test",
-    "/api/exchange-connections/save",
-    "/api/exchange-connections/activate",
-    "/api/exchange-connections/deactivate",
-    "/api/exchange-connections/credentials",
 )
 LOCAL_BOOTSTRAP_HOSTS = frozenset({"127.0.0.1", "::1", "localhost", "testclient"})
 VERCEL_PREVIEW_ORIGIN_RE = re.compile(r"^https://(?:frontend-nu-two-18|frontend-gh7asjvqj-ahmet-f11)(?:-[a-z0-9-]+)*\.vercel\.app$")
