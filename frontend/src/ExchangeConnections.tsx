@@ -4,7 +4,7 @@ import {
   KeyRound, Link2, LoaderCircle, LockKeyhole, Power, PowerOff,
   RefreshCw, ShieldCheck, TestTube2, Trash2, WalletCards,
 } from 'lucide-react'
-import { API_BASE } from './api'
+import { API_BASE, ownerAccessToken } from './api'
 
 type Mode = 'TESTNET'|'LIVE'
 type AccountSummary = {
@@ -49,6 +49,8 @@ export default function ExchangeConnections() {
   const call = async <T,>(path:string,options:RequestInit={}):Promise<T> => {
     const headers = new Headers(options.headers)
     if (options.body) headers.set('Content-Type','application/json')
+    const ownerToken = ownerAccessToken()
+    if (ownerToken) headers.set('X-ProTreBot-Owner',ownerToken)
     const controller = new AbortController()
     const timeout = window.setTimeout(() => controller.abort(),15000)
     let response:Response
@@ -120,7 +122,10 @@ export default function ExchangeConnections() {
     const next = await call<ConnectionStatus & {message:string}>('/activate',{method:'POST',body:JSON.stringify({mode:selected,confirmation})})
     setStatus(next)
     const connectPath = selected === 'TESTNET' ? '/binance-demo/connect' : '/v25/connect/read-only'
-    const connectResponse = await fetch(`${API_BASE}${connectPath}`,{method:'POST'})
+    const connectHeaders = new Headers()
+    const ownerToken = ownerAccessToken()
+    if (ownerToken) connectHeaders.set('X-ProTreBot-Owner',ownerToken)
+    const connectResponse = await fetch(`${API_BASE}${connectPath}`,{method:'POST',headers:connectHeaders})
     const connectPayload = await connectResponse.json().catch(() => null) as {detail?:unknown}|null
     if (!connectResponse.ok) throw new Error(`Kasa aktif ancak hesap merkezi bağlanamadı: ${errorText(connectPayload?.detail)}`)
     setNotice({kind:'ok',text:selected === 'TESTNET' ? 'Testnet kasası ve Demo hesap merkezi aktif. Emir kilidi yine ayrıca açılır.' : 'Gerçek hesap salt-okunur bağlandı. Gerçek emir kilidi ve otomasyon kapalı kaldı.'})
