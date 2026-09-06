@@ -42,6 +42,7 @@ function isOwnerProtectedApiRequest(input: RequestInfo | URL): boolean {
   if (path.startsWith(`${apiPath}/v22/admin/`)) return true
   if (path.startsWith(`${apiPath}/v22/customers`) || path.startsWith(`${apiPath}/v22/subscriptions/activate-demo`) || path.startsWith(`${apiPath}/v22/licenses/`) || path.startsWith(`${apiPath}/v22/plans/`)) return true
   if (path.startsWith(`${apiPath}/v24/overview`) || path.startsWith(`${apiPath}/v24/settings`) || path.startsWith(`${apiPath}/v24/leads`) || path.startsWith(`${apiPath}/v24/support/`)) return true
+  if (path.startsWith(`${apiPath}/exchange-connections/test`) || path.startsWith(`${apiPath}/exchange-connections/save`) || path.startsWith(`${apiPath}/exchange-connections/activate`) || path.startsWith(`${apiPath}/exchange-connections/deactivate`) || path.startsWith(`${apiPath}/exchange-connections/credentials`)) return true
   if (path.startsWith(`${apiPath}/v22/`) || path.startsWith(`${apiPath}/v24/`)) return false
   return path.startsWith(`${apiPath}/`)
 }

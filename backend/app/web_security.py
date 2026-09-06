@@ -19,6 +19,14 @@ MIN_ACCESS_TOKEN_LENGTH = 24
 PUBLIC_PATHS = frozenset({"/healthz", "/api/health"})
 OWNER_REQUIRED_PATHS = frozenset({"/api/web/access/check"})
 CUSTOMER_SESSION_PATH_PREFIXES = ("/api/v22", "/api/v24", "/api/v25")
+OWNER_GATE_PATH_PREFIXES = (
+    "/api/web/access/check",
+    "/api/exchange-connections/test",
+    "/api/exchange-connections/save",
+    "/api/exchange-connections/activate",
+    "/api/exchange-connections/deactivate",
+    "/api/exchange-connections/credentials",
+)
 LOCAL_BOOTSTRAP_HOSTS = frozenset({"127.0.0.1", "::1", "localhost", "testclient"})
 VERCEL_PREVIEW_ORIGIN_RE = re.compile(r"^https://(?:frontend-nu-two-18|frontend-gh7asjvqj-ahmet-f11)(?:-[a-z0-9-]+)*\.vercel\.app$")
 
@@ -113,7 +121,13 @@ def evaluate_access(
     if len(configured_token) < MIN_ACCESS_TOKEN_LENGTH:
         return AccessDecision(False, 503, "Web erişim kilidi sunucuda tamamlanmamış.")
 
-    provided = str(owner_access or "").strip() or bearer_token(authorization)
+    provided_owner = str(owner_access or "").strip()
+    if not any(path.startswith(prefix) for prefix in OWNER_GATE_PATH_PREFIXES):
+        if bearer_token(authorization):
+            return AccessDecision(True)
+        if provided_owner and hmac.compare_digest(provided_owner, configured_token):
+            return AccessDecision(True)
+    provided = provided_owner or bearer_token(authorization)
     if not provided:
         return AccessDecision(False, 401, "Yönetici erişim kodu gerekli.")
     if not hmac.compare_digest(provided, configured_token):

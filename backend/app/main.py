@@ -924,18 +924,21 @@ async def owner_preview_gate(request, call_next):
     )
     if not decision.allowed:
         return apply_cors_headers(request, JSONResponse({"detail": decision.detail}, status_code=decision.status_code))
-    if request.url.path.startswith("/api/") and request.method.upper() != "OPTIONS" and request.url.path not in MEMBER_PUBLIC_PATHS:
-        try:
-            request.state.member = authenticated_user(request)
-        except HTTPException as exc:
-            return apply_cors_headers(request, JSONResponse({"detail": exc.detail}, status_code=exc.status_code))
     configured_owner = str(request.headers.get("x-protrebot-owner") or "").strip() or bearer_token(request.headers.get("authorization"))
-    request.state.web_owner_authenticated = bool(
+    owner_access_authenticated = bool(
         WEB_REQUIRE_AUTH
         and request.method.upper() != "OPTIONS"
         and request.url.path not in PUBLIC_PATHS
         and configured_owner
         and configured_owner == WEB_ACCESS_TOKEN
+    )
+    if request.url.path.startswith("/api/") and request.method.upper() != "OPTIONS" and request.url.path not in MEMBER_PUBLIC_PATHS and not owner_access_authenticated:
+        try:
+            request.state.member = authenticated_user(request)
+        except HTTPException as exc:
+            return apply_cors_headers(request, JSONResponse({"detail": exc.detail}, status_code=exc.status_code))
+    request.state.web_owner_authenticated = bool(
+        owner_access_authenticated
     )
     paper_prefixes = ("/api/paper", "/api/v6", "/api/v7", "/api/v10", "/api/v11", "/api/v9/paper")
     if not PAPER_ENABLED and request.method.upper() in {"POST", "PUT", "DELETE", "PATCH"} and request.url.path.startswith(paper_prefixes):

@@ -35,10 +35,17 @@ class WebSecurityTests(unittest.TestCase):
     def test_wrong_owner_token_is_rejected(self):
         decision = evaluate_access(
             required=True, configured_token="a" * 32, authorization=f"Bearer {'b' * 32}",
-            path="/api/markets", method="GET",
+            path="/api/exchange-connections/save", method="POST",
         )
         self.assertFalse(decision.allowed)
         self.assertEqual(decision.status_code, 401)
+
+    def test_customer_bearer_reaches_normal_application_api(self):
+        decision = evaluate_access(
+            required=True, configured_token="a" * 32, authorization="Bearer customer-session",
+            path="/api/markets", method="GET",
+        )
+        self.assertTrue(decision.allowed)
 
     def test_correct_owner_token_is_accepted(self):
         token = "owner-preview-token-1234567890"
