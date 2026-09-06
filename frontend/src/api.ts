@@ -22,24 +22,28 @@ export function clearOwnerAccessToken(): void {
   sessionStorage.removeItem(TOKEN_KEY)
 }
 
-function isApiRequest(input: RequestInfo | URL): boolean {
+function apiRequestPath(input: RequestInfo | URL): string | null {
   try {
     const target = new URL(input instanceof Request ? input.url : String(input), window.location.href)
     const api = new URL(API_BASE, window.location.href)
-    return target.origin === api.origin && (target.pathname === api.pathname || target.pathname.startsWith(`${api.pathname}/`))
+    return target.origin === api.origin && (target.pathname === api.pathname || target.pathname.startsWith(`${api.pathname}/`)) ? target.pathname : null
   } catch {
-    return false
+    return null
   }
 }
 
-function isOwnerAccessCheckRequest(input: RequestInfo | URL): boolean {
-  try {
-    const target = new URL(input instanceof Request ? input.url : String(input), window.location.href)
-    const api = new URL(API_BASE, window.location.href)
-    return target.origin === api.origin && target.pathname === `${api.pathname}/web/access/check`
-  } catch {
-    return false
-  }
+function isOwnerProtectedApiRequest(input: RequestInfo | URL): boolean {
+  const path = apiRequestPath(input)
+  if (!path) return false
+  const apiPath = new URL(API_BASE, window.location.href).pathname
+  if (path === `${apiPath}/health`) return false
+  if (path === `${apiPath}/web/access/check`) return true
+  if (path.startsWith(`${apiPath}/v21/`) || path.startsWith(`${apiPath}/v25/`) || path.startsWith(`${apiPath}/v27/`)) return true
+  if (path.startsWith(`${apiPath}/v22/admin/`)) return true
+  if (path.startsWith(`${apiPath}/v22/customers`) || path.startsWith(`${apiPath}/v22/subscriptions/activate-demo`) || path.startsWith(`${apiPath}/v22/licenses/`) || path.startsWith(`${apiPath}/v22/plans/`)) return true
+  if (path.startsWith(`${apiPath}/v24/overview`) || path.startsWith(`${apiPath}/v24/settings`) || path.startsWith(`${apiPath}/v24/leads`) || path.startsWith(`${apiPath}/v24/support/`)) return true
+  if (path.startsWith(`${apiPath}/v22/`) || path.startsWith(`${apiPath}/v24/`)) return false
+  return path.startsWith(`${apiPath}/`)
 }
 
 export function installAuthorizedFetch(): void {
@@ -49,7 +53,7 @@ export function installAuthorizedFetch(): void {
     const headers = new Headers(input instanceof Request ? input.headers : undefined)
     new Headers(init.headers).forEach((value, key) => headers.set(key, value))
     const token = ownerAccessToken()
-    if (token && isOwnerAccessCheckRequest(input) && !headers.has('X-ProTreBot-Owner')) {
+    if (token && isOwnerProtectedApiRequest(input) && !headers.has('X-ProTreBot-Owner')) {
       headers.set('X-ProTreBot-Owner', token)
     }
     return originalFetch(input, {...init, headers})
