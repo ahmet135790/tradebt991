@@ -70,6 +70,7 @@ STANDARD_SESSION_SECONDS = 8 * 60 * 60
 REMEMBER_SESSION_SECONDS = 30 * 24 * 60 * 60
 COMMERCIAL_STATE_KEY = "v22-commercial"
 DURABLE_AUTH_REQUIRED = str(os.getenv("PROTREBOT_DURABLE_AUTH_REQUIRED", "")).strip().lower() in {"1", "true", "yes", "on"}
+BOOTSTRAP_OWNER_EMAIL = normalize_email(os.getenv("PROTREBOT_BOOTSTRAP_OWNER_EMAIL", "ahmtt4565@gmail.com"))
 DEFAULT_GMAIL_FROM_EMAIL = "privacykais@gmail.com"
 DEFAULT_GMAIL_FROM_NAME = "ProTreBot"
 GMAIL_SEND_SCOPE = "https://www.googleapis.com/auth/gmail.send"
@@ -645,28 +646,37 @@ async def v22_bootstrap(payload: BootstrapRequest, request: Request):
         raise HTTPException(403, "İlk yönetici yalnızca yerel uygulamadan veya doğrulanmış güvenli web oturumundan oluşturulabilir")
     async with rt["lock"]:
         state = rt["state"]
-        if state.get("owner_user_id"):
-            raise HTTPException(409, "İlk yönetici daha önce oluşturuldu")
         previous_state = copy.deepcopy(state)
         email = normalize_email(payload.email)
         if "@" not in email:
             raise HTTPException(422, "Geçerli bir e-posta yazın")
-        user_id = uuid.uuid4().hex
-        user = {
-            "id": user_id,
-            "email": email,
-            "display_name": payload.display_name.strip(),
-            "role": "OWNER",
-            "active": True,
-            "auth_version": 1,
-            "password": hash_password(payload.password),
-            "created_at": now_iso(),
-        }
-        state["users"].append(user)
+        existing_user = next((item for item in state["users"] if item.get("email") == email), None)
+        owner_exists = bool(state.get("owner_user_id"))
+        if owner_exists and email != BOOTSTRAP_OWNER_EMAIL:
+            raise HTTPException(409, "İlk yönetici daha önce oluşturuldu")
+        if existing_user is None:
+            user_id = uuid.uuid4().hex
+            user = {
+                "id": user_id,
+                "email": email,
+                "display_name": payload.display_name.strip(),
+                "role": "OWNER",
+                "active": True,
+                "auth_version": 1,
+                "password": hash_password(payload.password),
+                "created_at": now_iso(),
+            }
+            state["users"].append(user)
+        else:
+            user = existing_user
+            user_id = user["id"]
+            user["role"] = "OWNER"
+            user["active"] = True
         state["owner_user_id"] = user_id
-        expires_at = (datetime.now(timezone.utc) + timedelta(days=3650)).isoformat()
-        state["licenses"].append({"id": uuid.uuid4().hex, "user_id": user_id, "plan": "ELITE", "status": "ACTIVE", "starts_at": now_iso(), "expires_at": expires_at, "source": "OWNER_BOOTSTRAP", "demo_only": True})
-        add_audit(state, "OWNER_CREATED", "Yerel V24 sahibi ve geliştirme lisansı oluşturuldu.", actor=user_id, subject=user_id)
+        if not any(license_item.get("user_id") == user_id for license_item in state["licenses"]):
+            expires_at = (datetime.now(timezone.utc) + timedelta(days=3650)).isoformat()
+            state["licenses"].append({"id": uuid.uuid4().hex, "user_id": user_id, "plan": "ELITE", "status": "ACTIVE", "starts_at": now_iso(), "expires_at": expires_at, "source": "OWNER_BOOTSTRAP", "demo_only": True})
+        add_audit(state, "OWNER_BOOTSTRAP", "Bootstrap sahibi OWNER olarak hazırlandı.", actor=user_id, subject=user_id)
         save_state(state)
     persisted = await persist_v22_commercial(request.app)
     if DURABLE_AUTH_REQUIRED and not persisted:

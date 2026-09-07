@@ -25,7 +25,7 @@ from app.commercial_core import (  # noqa: E402
     verify_password,
     verify_token,
 )
-from app.v22_commercial import gmail_failure_log, send_auth_email, sync_v22_storage, v22_admin_link_trading_account, v22_admin_trading_accounts, v22_admin_unlink_trading_account, v22_verification_status  # noqa: E402
+from app.v22_commercial import BootstrapRequest, gmail_failure_log, send_auth_email, sync_v22_storage, v22_admin_link_trading_account, v22_admin_trading_accounts, v22_admin_unlink_trading_account, v22_bootstrap, v22_verification_status  # noqa: E402
 from app.main import health_check_redis, health_item, healthz, run_health_checks  # noqa: E402
 
 
@@ -39,6 +39,28 @@ GITIGNORE_SOURCE = (ROOT / ".gitignore").read_text(encoding="utf-8")
 
 
 class V22CommercialTests(unittest.TestCase):
+    def test_bootstrap_promotes_existing_admin_without_changing_password(self):
+        original_password = hash_password("ExistingStrong!123")
+        owner = {
+            "id": "existing-admin",
+            "email": "ahmtt4565@gmail.com",
+            "display_name": "Existing Admin",
+            "role": "CUSTOMER",
+            "active": False,
+            "auth_version": 1,
+            "password": original_password,
+        }
+        state = {"users": [owner], "owner_user_id": "old-owner", "licenses": [], "audit": []}
+        application = SimpleNamespace(state=SimpleNamespace(v22_commercial={"state": state, "secret": b"bootstrap-secret", "lock": asyncio.Lock()}))
+        request = SimpleNamespace(app=application, client=SimpleNamespace(host="127.0.0.1"), state=SimpleNamespace(web_owner_authenticated=True))
+        payload = BootstrapRequest(display_name="Ignored Display Name", email=owner["email"], password="NewBootstrap!123", remember=True)
+        with patch("app.v22_commercial.save_state"), patch("app.v22_commercial.persist_v22_commercial", new=AsyncMock(return_value=True)), patch("app.v22_commercial.bootstrap_access_allowed", return_value=True):
+            result = asyncio.run(v22_bootstrap(payload, request))
+        self.assertEqual(result["user"]["role"], "OWNER")
+        self.assertTrue(owner["active"])
+        self.assertEqual(owner["password"], original_password)
+        self.assertEqual(state["owner_user_id"], owner["id"])
+
     def test_health_result_is_safe_and_standardized(self):
         result = health_item("Database", "ERROR", "Database connection failed.", 0.0)
         self.assertEqual(set(result), {"name", "status", "message", "checked_at", "latency_ms"})
