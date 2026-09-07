@@ -174,7 +174,7 @@ export default function AuthGate({children}:{children:ReactNode}) {
         if (result.user.role !== 'OWNER' && result.user.email_verified === false) {
           setEmail(result.user.email); setResetToken(''); setMode('verify'); setMessage('Önce e-posta adresinizi doğrulayın. Doğrulama kodunu e-postanızdan alın.')
         } else {
-          saveUserSessionToken(result.token,remember); setToken(result.token); setSession({user:result.user})
+          saveUserSessionToken(result.token,remember); setMemberMenuOpen(false); setToken(result.token); setSession({user:result.user})
         }
       } else if (mode === 'register') {
         const result = await request<{verification_status_token?:string;message:string}>('/auth/register',{method:'POST',body:JSON.stringify(register)})
@@ -196,7 +196,7 @@ export default function AuthGate({children}:{children:ReactNode}) {
 
   const logout = async () => {
     try { if (token) await request('/auth/logout',{method:'POST',headers:{Authorization:`Bearer ${token}`}}) } catch { /* local logout still clears the session */ }
-    clearUserSessionToken(); setToken(''); setSession(null); setMode('login'); setMessage('Oturum kapatıldı.')
+    clearUserSessionToken(); setMemberMenuOpen(false); setToken(''); setSession(null); setMode('login'); setMessage('Oturum kapatıldı.')
   }
 
   if (busy && !session) return <main className="authLoading"><div className="authLoader"><ShieldCheck/><b>GÜVENLİ OTURUM</b><span>Hesap durumu kontrol ediliyor…</span></div></main>
