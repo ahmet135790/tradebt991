@@ -1,5 +1,5 @@
 import { type FormEvent, type ReactNode, useEffect, useRef, useState } from 'react'
-import { Activity, ArrowRight, Eye, EyeOff, KeyRound, LogOut, MailCheck, ShieldCheck, UserRound } from 'lucide-react'
+import { Activity, ArrowRight, ChevronDown, Eye, EyeOff, KeyRound, LogOut, MailCheck, ShieldCheck, UserRound } from 'lucide-react'
 import { API_BASE, clearUserSessionToken, saveUserSessionToken, userSessionToken } from './api'
 import AdminPanel from './AdminPanel'
 import './auth.css'
@@ -81,6 +81,19 @@ export default function AuthGate({children}:{children:ReactNode}) {
   const [verificationNotice,setVerificationNotice] = useState(false)
   const autoVerificationStarted = useRef(false)
   const [autoVerifying,setAutoVerifying] = useState(false)
+  const [memberMenuOpen,setMemberMenuOpen] = useState(false)
+  const memberMenuRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!memberMenuOpen) return
+    const closeMenu = (event:MouseEvent) => {
+      if (memberMenuRef.current && !memberMenuRef.current.contains(event.target as Node)) setMemberMenuOpen(false)
+    }
+    const closeOnEscape = (event:KeyboardEvent) => { if (event.key === 'Escape') setMemberMenuOpen(false) }
+    document.addEventListener('mousedown',closeMenu)
+    document.addEventListener('keydown',closeOnEscape)
+    return () => { document.removeEventListener('mousedown',closeMenu); document.removeEventListener('keydown',closeOnEscape) }
+  },[memberMenuOpen])
 
   const loadSession = async (value:string) => {
     if (!value) { setBusy(false); return }
@@ -215,5 +228,5 @@ export default function AuthGate({children}:{children:ReactNode}) {
   if (path.startsWith('/admin') && session.user.role !== 'OWNER') return <main className="authLoading"><div className="authLoader"><ShieldCheck/><b>403 · ERİŞİM YOK</b><span>Bu alan yalnızca yönetici hesaplarına açıktır.</span><button onClick={() => {history.replaceState(null,'','/dashboard'); location.reload()}}>Dashboard'a dön</button></div></main>
   if (path.startsWith('/admin')) return <><div className="authSessionBar"><span><ShieldCheck/> {session.user.display_name} <b>ADMIN</b></span><button onClick={() => void logout()}><LogOut/> Çıkış</button></div><AdminPanel token={token} onBack={() => {history.replaceState(null,'','/dashboard');location.reload()}}/></>
   if (path.startsWith('/settings')) return <><div className="authSessionBar"><span><ShieldCheck/> {session.user.display_name} <b>{session.user.role === 'OWNER' ? 'ADMIN' : 'MEMBER'}</b></span><button onClick={() => void logout()}><LogOut/> Çıkış</button></div><ProfileSettings token={token} user={session.user} onLogout={() => void logout()}/></>
-  return <><div className="authSessionBar"><span><ShieldCheck/> {session.user.display_name} <b>{session.user.role === 'OWNER' ? 'ADMIN' : 'MEMBER'}</b></span>{session.user.role === 'OWNER' && <button onClick={() => {location.assign('/admin')}}><ShieldCheck/> Admin Dashboard</button>}<button onClick={() => {location.assign('/settings')}}><UserRound/> Profile</button><button onClick={() => void logout()}><LogOut/> Çıkış</button></div>{children}</>
+  return <><div className="authSessionBar" ref={memberMenuRef}><button className="authMemberTrigger" type="button" aria-expanded={memberMenuOpen} aria-haspopup="menu" onClick={() => setMemberMenuOpen(value => !value)}><span className="authMemberIdentity"><ShieldCheck/><span><strong>{session.user.display_name}</strong><b>{session.user.role === 'OWNER' ? 'ADMIN' : 'MEMBER'}</b></span></span><ChevronDown className={memberMenuOpen ? 'authMemberChevronOpen' : ''}/></button>{memberMenuOpen && <div className="authMemberMenu" role="menu"><div className="authMemberMenuHead"><small>SECURE ACCOUNT</small><strong>{session.user.email}</strong></div>{session.user.role === 'OWNER' && <button type="button" role="menuitem" onClick={() => {setMemberMenuOpen(false);location.assign('/admin')}}><ShieldCheck/><span><b>Admin Dashboard</b><small>Control center</small></span></button>}<button type="button" role="menuitem" onClick={() => {setMemberMenuOpen(false);location.assign('/settings')}}><UserRound/><span><b>Profile &amp; Settings</b><small>Identity and security</small></span></button><button className="authMemberLogout" type="button" role="menuitem" onClick={() => void logout()}><LogOut/><span><b>Çıkış</b><small>End secure session</small></span></button></div>}</div>{children}</>
 }
