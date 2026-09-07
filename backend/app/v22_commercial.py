@@ -412,6 +412,8 @@ def admin_overview(state: dict[str, Any]) -> dict[str, Any]:
     return {
         "users": len(state["users"]), "total_users": len(state["users"]),
         "active_users": sum(1 for item in state["users"] if item.get("active")),
+        "verified_users": sum(1 for item in state["users"] if item.get("email_verified") is True),
+        "admins": sum(1 for item in state["users"] if item.get("role") == "OWNER"),
         "new_users": sum(1 for item in state["users"] if parse_date(item.get("created_at")) >= new_cutoff),
         "pro_users": len(pro_users), "free_users": max(0, len(state["users"]) - len(pro_users)),
         "active_subscriptions": len(active_subscriptions), "expired_subscriptions": sum(1 for item in state.get("subscriptions", []) if item.get("expires_at") and parse_date(item.get("expires_at")) <= now),
@@ -598,6 +600,11 @@ class CustomerStatusRequest(BaseModel):
 
 class RoleUpdateRequest(BaseModel):
     role: Literal["OWNER", "CUSTOMER"]
+
+
+class UserDeleteRequest(BaseModel):
+    email: str = Field(min_length=5, max_length=180)
+    confirmation: Literal["DELETE USER"]
 
 
 class RevokeRequest(BaseModel):
@@ -1215,12 +1222,12 @@ async def v22_admin_unlink_trading_account(user_id: str, account_id: str, reques
 async def v22_admin_update_role(user_id: str, payload: RoleUpdateRequest, request: Request):
     owner = authenticated_user(request, owner=True)
     rt = runtime(request)
-    if user_id == owner["id"] and payload.role != "OWNER":
-        raise HTTPException(422, "Son yönetici hesabının rolü düşürülemez")
     async with rt["lock"]:
         user = next((item for item in rt["state"]["users"] if item.get("id") == user_id), None)
         if not user:
             raise HTTPException(404, "Kullanıcı bulunamadı")
+        if user.get("role") == "OWNER" and payload.role != "OWNER":
+            raise HTTPException(409, "OWNER hesabının rolü düşürülemez")
         user["role"] = payload.role
         user["auth_version"] = int(user.get("auth_version", 1)) + 1
         add_audit(rt["state"], "ROLE_CHANGED", f"Kullanıcı rolü {payload.role} olarak güncellendi.", actor=owner["id"], subject=user_id)
@@ -1233,6 +1240,72 @@ async def v22_admin_update_role(user_id: str, payload: RoleUpdateRequest, reques
 async def v22_operations(request: Request):
     authenticated_user(request)
     return operations_overview(request.app)
+
+
+@router.post("/admin/users/{user_id}/password-reset")
+async def v22_admin_password_reset(user_id: str, request: Request):
+    owner = authenticated_user(request, owner=True)
+    rt = runtime(request)
+    user = next((item for item in rt["state"]["users"] if item.get("id") == user_id), None)
+    if not user:
+        raise HTTPException(404, "Kullanıcı bulunamadı")
+    async with rt["lock"]:
+        reset_token = issue_one_time_token(rt["state"], user, rt["secret"], kind="PASSWORD_RESET")
+        add_audit(rt["state"], "PASSWORD_RESET_REQUESTED", "Yönetici parola yenileme bağlantısı istedi.", actor=owner["id"], subject=user_id)
+        save_state(rt["state"])
+    await persist_v22_commercial(request.app)
+    if gmail_configured():
+        try:
+            await asyncio.to_thread(send_auth_email, to_email=user["email"], display_name=user["display_name"], subject="Reset your ProTreBot password", title="Reset your ProTreBot password", action_url=f"{app_base_url()}/reset-password?token={reset_token}", action_label="RESET PASSWORD")
+        except (OSError, RuntimeError, ValueError) as exc:
+            log_gmail_failure(exc)
+    return {"ok": True, "message": "Parola yenileme bağlantısı gönderildi.", "demo_only": True}
+
+
+@router.post("/admin/users/{user_id}/sessions/revoke")
+async def v22_admin_revoke_sessions(user_id: str, request: Request):
+    owner = authenticated_user(request, owner=True)
+    rt = runtime(request)
+    async with rt["lock"]:
+        user = next((item for item in rt["state"]["users"] if item.get("id") == user_id), None)
+        if not user:
+            raise HTTPException(404, "Kullanıcı bulunamadı")
+        user["auth_version"] = int(user.get("auth_version", 1)) + 1
+        add_audit(rt["state"], "SESSIONS_REVOKED", "Kullanıcının tüm oturumları sonlandırıldı.", actor=owner["id"], subject=user_id)
+        save_state(rt["state"])
+    await persist_v22_commercial(request.app)
+    return {"ok": True, "message": "Tüm kullanıcı oturumları sonlandırıldı.", "demo_only": True}
+
+
+@router.delete("/admin/users/{user_id}")
+async def v22_admin_delete_user(user_id: str, payload: UserDeleteRequest, request: Request):
+    owner = authenticated_user(request, owner=True)
+    rt = runtime(request)
+    email = normalize_email(payload.email)
+    async with rt["lock"]:
+        state = rt["state"]
+        user = next((item for item in state["users"] if item.get("id") == user_id), None)
+        if not user:
+            raise HTTPException(404, "Kullanıcı bulunamadı")
+        if user_id == owner["id"]:
+            raise HTTPException(409, "OWNER kendi hesabını silemez")
+        if user.get("role") == "OWNER":
+            raise HTTPException(409, "OWNER hesabı silinemez")
+        if email != normalize_email(user.get("email", "")):
+            raise HTTPException(422, "Silinecek hesabın e-posta adresi eşleşmiyor")
+        add_audit(state, "USER_PERMANENTLY_DELETED", "Kullanıcı hesabı kalıcı olarak silindi.", actor=owner["id"], subject=user_id)
+        for key in ("users", "profiles", "licenses", "subscriptions", "agents", "auth_tokens"):
+            if key in state:
+                state[key] = [item for item in state[key] if item.get("user_id") != user_id and item.get("id") != user_id]
+        save_state(state)
+    pool = getattr(request.app.state, "db_pool", None)
+    if pool is not None:
+        try:
+            await pool.execute("DELETE FROM trading_accounts WHERE user_id = $1", user_id)
+        except Exception as exc:
+            raise HTTPException(503, "Kullanıcının kalıcı trading ilişkileri silinemedi") from exc
+    await persist_v22_commercial(request.app)
+    return {"ok": True, "message": "Kullanıcı kalıcı olarak silindi.", "demo_only": True}
 
 
 @router.post("/auth/change-password")
@@ -1295,6 +1368,7 @@ async def v22_customer_status(user_id: str, payload: CustomerStatusRequest, requ
         message = f"{user['email']} {'etkinleştirildi' if payload.active else 'askıya alındı'}: {payload.reason}"
         add_audit(rt["state"], kind, message, actor=owner["id"], subject=user_id)
         save_state(rt["state"])
+    await persist_v22_commercial(request.app)
     return {"user": public_user(user), "agents_revoked": not payload.active, "demo_only": True}
 
 

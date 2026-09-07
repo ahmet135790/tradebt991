@@ -127,6 +127,18 @@ class V22CommercialTests(unittest.TestCase):
         self.assertNotIn('SELECT * FROM trading_accounts', source)
         self.assertIn('raise HTTPException(404, "Kullanıcı bulunamadı")', source)
 
+    def test_admin_user_management_contract_is_owner_protected(self):
+        source = V22_SOURCE
+        self.assertIn('@router.post("/admin/users/{user_id}/password-reset")', source)
+        self.assertIn('@router.post("/admin/users/{user_id}/sessions/revoke")', source)
+        self.assertIn('@router.delete("/admin/users/{user_id}")', source)
+        self.assertIn('confirmation: Literal["DELETE USER"]', source)
+        self.assertIn('raise HTTPException(409, "OWNER hesabı silinemez")', source)
+        self.assertIn('raise HTTPException(409, "OWNER hesabının rolü düşürülemez")', source)
+        self.assertIn('"PASSWORD_RESET_REQUESTED"', source)
+        self.assertIn('"SESSIONS_REVOKED"', source)
+        self.assertIn('"USER_PERMANENTLY_DELETED"', source)
+
     def test_trading_account_endpoint_enforces_owner_and_returns_empty_without_accounts(self):
         from fastapi import HTTPException
 
