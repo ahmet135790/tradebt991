@@ -52,6 +52,12 @@ class SubscriptionCoreTests(unittest.TestCase):
         with patch.dict("os.environ", {"APP_BASE_URL": "javascript:alert(1)"}, clear=False):
             with self.assertRaises(v22_commercial.HTTPException):
                 v22_commercial.stripe_base_url()
+
+    def test_production_verification_link_uses_frontend_route(self):
+        with patch.dict("os.environ", {"APP_BASE_URL": "https://frontend-nu-two-18.vercel.app"}, clear=False):
+            verification_link = f"{v22_commercial.app_base_url()}/verify-email?token=opaque-test-token"
+        self.assertEqual(verification_link, "https://frontend-nu-two-18.vercel.app/verify-email?token=opaque-test-token")
+        self.assertNotIn("localhost:5173", verification_link)
         with patch.dict("os.environ", {"APP_BASE_URL": "https://example.com/?redirect=https://evil.example"}, clear=False):
             with self.assertRaises(v22_commercial.HTTPException):
                 v22_commercial.stripe_base_url()

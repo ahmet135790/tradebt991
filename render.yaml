@@ -23,7 +23,7 @@ services:
       - key: PROTREBOT_CORS_ORIGINS
         value: https://frontend-nu-two-18.vercel.app
       - key: APP_BASE_URL
-        sync: false
+        value: https://frontend-nu-two-18.vercel.app
       - key: GMAIL_CLIENT_ID
         sync: false
       - key: GMAIL_CLIENT_SECRET
